@@ -49,6 +49,8 @@ export function ToolModal({ tool, onClose }: ToolModalProps) {
   });
   const [pageCount, setPageCount] = useState(0);
   const [selectedPages, setSelectedPages] = useState<number[]>([]);
+  const [pageRangeStart, setPageRangeStart] = useState('');
+  const [pageRangeEnd, setPageRangeEnd] = useState('');
   const [pageOrder, setPageOrder] = useState<number[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -189,6 +191,8 @@ export function ToolModal({ tool, onClose }: ToolModalProps) {
     setPageCount(0);
     setSelectedPages([]);
     setPageOrder([]);
+    setPageRangeStart('');
+    setPageRangeEnd('');
   }, []);
 
   const handleProcess = useCallback(async () => {
@@ -243,28 +247,48 @@ export function ToolModal({ tool, onClose }: ToolModalProps) {
           break;
         }
           
-        case 'rotate':
+        case 'rotate': {
+          // selectedPages now stores 1-based page numbers (matching the visible buttons).
+          // Convert to 0-based indices before calling the utility.
+          const indices = selectedPages.map(p => p - 1);
           if (options.perPageRotation && options.pageRotations && Object.keys(options.pageRotations).length > 0) {
             // Per-page rotation mode
             result = await pdfUtils.rotatePDFPages(files[0], 0, undefined, options.pageRotations);
           } else {
             // Same rotation for selected pages
-            result = await pdfUtils.rotatePDFPages(files[0], options.rotation || 90, selectedPages.length > 0 ? selectedPages : undefined);
+            result = await pdfUtils.rotatePDFPages(files[0], options.rotation || 90, indices.length > 0 ? indices : undefined);
           }
           filename = 'rotated.pdf';
           break;
+        }
           
-        case 'remove-pages':
+        case 'remove-pages': {
           if (selectedPages.length === 0) throw new Error('Please select pages to remove');
-          result = await pdfUtils.removePDFPages(files[0], selectedPages);
+          const indices = selectedPages.map(p => p - 1);
+          result = await pdfUtils.removePDFPages(files[0], indices);
           filename = 'pages_removed.pdf';
           break;
+        }
           
-        case 'extract-pages':
-          if (selectedPages.length === 0) throw new Error('Please select pages to extract');
-          result = await pdfUtils.extractPDFPages(files[0], selectedPages);
+        case 'extract-pages': {
+          // Prefer an explicit range (e.g. 472–491) over individually selected pages.
+          const start = parseInt(pageRangeStart, 10);
+          const end = parseInt(pageRangeEnd, 10);
+          if (pageRangeStart !== '' || pageRangeEnd !== '') {
+            if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end > pageCount || start > end) {
+              throw new Error(`Invalid page range. Enter a range between 1 and ${pageCount} (start ≤ end).`);
+            }
+            const rangeIndices: number[] = [];
+            for (let p = start; p <= end; p++) rangeIndices.push(p - 1);
+            result = await pdfUtils.extractPDFPages(files[0], rangeIndices);
+          } else {
+            if (selectedPages.length === 0) throw new Error('Please select pages to extract');
+            const indices = selectedPages.map(p => p - 1);
+            result = await pdfUtils.extractPDFPages(files[0], indices);
+          }
           filename = 'extracted_pages.pdf';
           break;
+        }
           
         case 'rearrange':
           if (pageOrder.length === 0) throw new Error('No pages to rearrange');
@@ -355,7 +379,7 @@ export function ToolModal({ tool, onClose }: ToolModalProps) {
       }
       setIsProcessing(false);
     }
-  }, [files, tool.id, options, selectedPages, pageOrder, requiresFileUpload]);
+  }, [files, tool.id, options, selectedPages, pageOrder, pageRangeStart, pageRangeEnd, pageCount, requiresFileUpload]);
 
   const handleDownload = useCallback(() => {
     if (resultBlob) {
@@ -373,6 +397,8 @@ export function ToolModal({ tool, onClose }: ToolModalProps) {
     setSelectedPages([]);
     setPageOrder([]);
     setPageCount(0);
+    setPageRangeStart('');
+    setPageRangeEnd('');
     setCompressionResult(null);
     // Reset rotation options
     setOptions(prev => ({ ...prev, pageRotations: {}, perPageRotation: false }));
@@ -823,15 +849,50 @@ export function ToolModal({ tool, onClose }: ToolModalProps) {
               {/* Page Selection for select operations */}
               {needsPageSelection && pageCount > 0 && (
                 <div className="mt-4">
+                  {tool.id === 'extract-pages' && (
+                    <div className="mb-3 p-3 bg-red-50 border border-red-100 rounded-lg">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Or extract a page range (e.g. 472–491)
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="1"
+                          max={pageCount}
+                          placeholder="Start page"
+                          value={pageRangeStart}
+                          onChange={(e) => setPageRangeStart(e.target.value)}
+                          className="w-32 px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 text-sm"
+                        />
+                        <span className="text-gray-500">–</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max={pageCount}
+                          placeholder="End page"
+                          value={pageRangeEnd}
+                          onChange={(e) => setPageRangeEnd(e.target.value)}
+                          className="w-32 px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500 text-sm"
+                        />
+                        <button
+                          onClick={() => { setPageRangeStart(''); setPageRangeEnd(''); }}
+                          className="text-xs text-gray-500 hover:text-red-500 underline"
+                        >
+                          Clear range
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <label className="block text-sm font-medium text-gray-700 mb-2">Select Pages ({selectedPages.length} selected)</label>
                   <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-2 bg-gray-50 rounded-lg">
                     {Array.from({ length: pageCount }, (_, i) => (
                       <button
                         key={i}
-                        onClick={() => setSelectedPages(prev => prev.includes(i) ? prev.filter(p => p !== i) : [...prev, i])}
+                        onClick={() => setSelectedPages(prev => prev.includes(i + 1) ? prev.filter(p => p !== i + 1) : [...prev, i + 1])}
                         className={cn(
                           "w-8 h-8 rounded text-sm font-medium",
-                          selectedPages.includes(i) ? "bg-red-500 text-white" : "bg-white border text-gray-700"
+                          selectedPages.includes(i + 1) ? "bg-red-500 text-white" : "bg-white border text-gray-700"
                         )}
                       >
                         {i + 1}
